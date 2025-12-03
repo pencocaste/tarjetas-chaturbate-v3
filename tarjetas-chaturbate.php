@@ -192,7 +192,7 @@ function chaturbate_generate_model_card($m, $wl = '', $track = 'default') {
     <div class="chaturbate-model-card" data-username="<?php echo esc_attr($user); ?>">
         <a href="<?php echo esc_url($url); ?>" target="_blank" rel="noopener nofollow">
             <div class="chaturbate-model-image">
-                <img src="<?php echo esc_url($img); ?>"
+                <img decoding="async" src="<?php echo esc_url($img); ?>"
                      alt="<?php echo esc_attr("$user live cam"); ?>"
                      loading="lazy" width="360" height="270">
             </div>
