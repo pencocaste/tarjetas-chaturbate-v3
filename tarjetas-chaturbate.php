@@ -2,7 +2,7 @@
 /*
  * Plugin Name: Tarjetas de Modelos de Chaturbate
  * Description: Muestra tarjetas de modelos de Chaturbate con diseño personalizado y funcionalidades avanzadas.
- * Version: 3.5.2
+ * Version: 3.6.0
  * Author: Tu Nombre
  */
 
@@ -11,11 +11,32 @@ if (!defined('ABSPATH')) {
     exit;
 }
 
+/*────────────────────  Constantes del plugin  ────────────────────*/
+define('CHATURBATE_CARDS_VERSION', '3.6.0');
+define('CHATURBATE_CARDS_ESI_BLOCK', 'chaturbate_models_esi');
+
+/*────────────────────  Detectar LiteSpeed Cache y ESI  ────────────────────*/
+function chaturbate_is_litespeed_esi_active() {
+    // Verificar si LiteSpeed Cache está activo y ESI está habilitado
+    if (defined('LSCWP_V') && apply_filters('litespeed_esi_status', false)) {
+        return true;
+    }
+    return false;
+}
+
 /*────────────────────  Eliminar JS heredado del tema  ────────────────────*/
 add_action('wp_print_scripts', function () {
     wp_dequeue_script('chaturbate-models-js');
     wp_deregister_script('chaturbate-models-js');
 }, 1);
+
+/*────────────────────  Registrar nonce con LiteSpeed  ────────────────────*/
+add_action('init', function() {
+    if (defined('LSCWP_V')) {
+        // Registrar el nonce personalizado con LiteSpeed para que lo maneje como ESI
+        do_action('litespeed_nonce', 'chaturbate_model_cards_nonce');
+    }
+});
 
 /*────────────────────  Encolar scripts y estilos  ────────────────────*/
 function chaturbate_model_cards_enqueue_scripts() {
@@ -23,7 +44,7 @@ function chaturbate_model_cards_enqueue_scripts() {
         'chaturbate-model-cards',
         plugin_dir_url(__FILE__) . 'js/chaturbate-model-cards.js',
         array(),
-        '3.5.2',
+        CHATURBATE_CARDS_VERSION,
         true
     );
 
@@ -38,36 +59,10 @@ function chaturbate_model_cards_enqueue_scripts() {
         'chaturbate-model-cards-style',
         plugin_dir_url(__FILE__) . 'css/chaturbate-model-cards.css',
         array(),
-        '3.5.2'
+        CHATURBATE_CARDS_VERSION
     );
 }
 add_action('wp_enqueue_scripts', 'chaturbate_model_cards_enqueue_scripts');
-
-/*────────────────────  Desactivar caché para páginas con shortcode  ────────────────────*/
-function chaturbate_disable_page_caching($content) {
-    if (has_shortcode($content, 'chaturbate_models')) {
-        header('Cache-Control: no-store, no-cache, must-revalidate, max-age=0');
-        header('Cache-Control: post-check=0, pre-check=0', false);
-        header('Pragma: no-cache');
-
-        if (!defined('DONOTCACHEPAGE')) {
-            define('DONOTCACHEPAGE', true);
-        }
-    }
-    return $content;
-}
-add_filter('the_content', 'chaturbate_disable_page_caching', 5);
-
-function chaturbate_disable_object_caching($wp) {
-    if (is_singular()) {
-        $post = get_post();
-        if ($post && has_shortcode($post->post_content, 'chaturbate_models')) {
-            wp_cache_delete($post->ID, 'posts');
-            wp_cache_delete('post_' . $post->ID, 'post_meta');
-        }
-    }
-}
-add_action('wp', 'chaturbate_disable_object_caching');
 
 /*────────────────────  Cron (limpieza de transients)  ────────────────────*/
 function chaturbate_add_cron_interval($s) {
@@ -101,7 +96,7 @@ add_action('chaturbate_cleanup_cache', function () {
     );
 });
 
-/*────────────────────  Helper de caché  ────────────────────*/
+/*────────────────────  Helper de caché interno (transients)  ────────────────────*/
 function get_chaturbate_api_cache($key) {
     $c = get_transient('chaturbate_models_' . $key);
     if ($c && isset($c['timestamp'], $c['data']) && (time() - $c['timestamp']) <= 120) {
@@ -229,17 +224,8 @@ function chaturbate_generate_model_card($m, $wl = '', $track = 'default') {
     return ob_get_clean();
 }
 
-/*────────────────────  Shortcode  ────────────────────*/
-function chaturbate_model_cards_shortcode($atts) {
-    $atts = shortcode_atts(array(
-        'gender'     => 'f',
-        'limit'      => 10,
-        'tag'        => '',
-        'region'     => '',
-        'whitelabel' => '',
-        'track'      => 'default',
-    ), $atts, 'chaturbate_models');
-
+/*────────────────────  Generar HTML del contenedor de modelos  ────────────────────*/
+function chaturbate_render_models_html($atts) {
     $g   = sanitize_text_field($atts['gender']);
     $l   = absint($atts['limit']);
     $tag = sanitize_text_field($atts['tag']);
@@ -279,6 +265,63 @@ function chaturbate_model_cards_shortcode($atts) {
     </div>
     <?php
     return ob_get_clean();
+}
+
+/*────────────────────  Handler ESI de LiteSpeed  ────────────────────*/
+add_action('litespeed_esi_load-' . CHATURBATE_CARDS_ESI_BLOCK, function($params) {
+    // Marcar este bloque como NO cacheable - siempre se genera dinámicamente
+    do_action('litespeed_control_set_nocache');
+
+    // Reconstruir los atributos desde los parámetros ESI
+    $atts = array(
+        'gender'     => isset($params['gender']) ? $params['gender'] : 'f',
+        'limit'      => isset($params['limit']) ? $params['limit'] : 10,
+        'tag'        => isset($params['tag']) ? $params['tag'] : '',
+        'region'     => isset($params['region']) ? $params['region'] : '',
+        'whitelabel' => isset($params['whitelabel']) ? $params['whitelabel'] : '',
+        'track'      => isset($params['track']) ? $params['track'] : 'default',
+    );
+
+    // Generar y mostrar el HTML
+    echo chaturbate_render_models_html($atts);
+});
+
+/*────────────────────  Shortcode  ────────────────────*/
+function chaturbate_model_cards_shortcode($atts) {
+    $atts = shortcode_atts(array(
+        'gender'     => 'f',
+        'limit'      => 10,
+        'tag'        => '',
+        'region'     => '',
+        'whitelabel' => '',
+        'track'      => 'default',
+    ), $atts, 'chaturbate_models');
+
+    // Si LiteSpeed ESI está activo, usar bloque ESI
+    if (chaturbate_is_litespeed_esi_active()) {
+        // Parámetros para pasar al bloque ESI
+        $esi_params = array(
+            'gender'     => sanitize_text_field($atts['gender']),
+            'limit'      => absint($atts['limit']),
+            'tag'        => sanitize_text_field($atts['tag']),
+            'region'     => sanitize_text_field($atts['region']),
+            'whitelabel' => esc_url($atts['whitelabel']),
+            'track'      => sanitize_text_field($atts['track']),
+        );
+
+        // Generar URL del bloque ESI (no cacheado)
+        // Parámetros: block_id, wrapper/comment, params, control, silence
+        return apply_filters(
+            'litespeed_esi_url',
+            CHATURBATE_CARDS_ESI_BLOCK,           // block_id
+            'Chaturbate Models Dynamic Block',     // wrapper/comment
+            $esi_params,                           // params
+            'no-cache'                             // control - marcar como no cacheable
+        );
+    }
+
+    // Fallback: renderizar directamente si ESI no está disponible
+    return chaturbate_render_models_html($atts);
 }
 add_shortcode('chaturbate_models', 'chaturbate_model_cards_shortcode');
 
